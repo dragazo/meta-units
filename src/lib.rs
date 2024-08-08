@@ -3,13 +3,14 @@
 #![no_std]
 
 /// This type is only needed to bypass a limitation of the current (stable) trait bound system.
-/// See: https://github.com/taiki-e/pin-project/issues/102#issuecomment-540472282
+/// See: <https://github.com/taiki-e/pin-project/issues/102#issuecomment-540472282>
+#[doc(hidden)]
 pub struct Wrapper<'a, T>(T, ::core::marker::PhantomData<&'a ()>);
 impl<'a, T> Wrapper<'a, T> {
     pub fn new(v: T) -> Self {
         Self(v, ::core::marker::PhantomData)
     }
-    pub fn raw(&self) -> &T {
+    pub fn get(&self) -> &T {
         &self.0
     }
 }
@@ -47,16 +48,18 @@ impl<T: ::core::cmp::Ord> ::core::cmp::Ord for Wrapper<'_, T> {
 }
 
 /// An abstract unit of measure.
+/// 
+/// New [`Unit`] types can be defined by [`make_unit`].
 pub trait Unit: ::core::clone::Clone {
     /// The raw type used to represent the numeric value of this unit.
-    type Raw;
-    /// The type this unit is based on (possibly itself).
-    type Base: Unit<Raw = Self::Raw, Base = Self::Base>;
+    type T;
+    /// The type this unit is based on (possibly itself in the case of a "base" unit).
+    type Base: Unit<T = Self::T, Base = Self::Base>;
 
     /// Constructs a new instance of this unit from a raw numeric value.
-    fn new(v: Self::Raw) -> Self;
+    fn new(v: Self::T) -> Self;
     /// Gets the raw numeric value of this unit.
-    fn raw(&self) -> &Self::Raw;
+    fn get(&self) -> &Self::T;
 
     /// Constructs a derived unit from its base unit.
     fn from_base(v: Self::Base) -> Self;
@@ -64,11 +67,32 @@ pub trait Unit: ::core::clone::Clone {
     fn into_base(self) -> Self::Base;
 
     /// Converts this unit into a compatible unit.
-    fn convert<U: Unit<Raw = Self::Raw, Base = Self::Base>>(self) -> U {
+    fn convert<U: Unit<T = Self::T, Base = Self::Base>>(self) -> U {
         U::from_base(self.into_base())
     }
 }
 
+/// Defines a new [`Unit`] type.
+///
+/// To create a unit, you begin with the notation `Name : T` where `Name` is the name of the new unit and `T` is the backing data type (e.g., `f64`).
+/// This is all that is needed to create a "base" unit.
+///
+/// To create a derived unit, you add the notation `base = Base, from_base = <expr>, into_base = <expr>` to define the derived unit's base type and bidirectional conversion to/from the base unit.
+/// `from_base` and `into_base` are expected to be functions (or closures) that perform said conversion.
+///
+/// ## Example
+///
+/// ```
+/// # use meta_units::make_unit;
+/// make_unit! { Meters : f64 }
+/// make_unit! {
+///     Kilometers : f64,
+///     base = Meters,
+///     from_base = |x: Meters| Kilometers::new(x.get() / 1e3),
+///     into_base = |x: Kilometers| Meters::new(x.get() * 1e3),
+/// }
+///
+/// ```
 #[macro_export]
 macro_rules! make_unit {
     ($vis:vis $name:ident : $t:ty) => {
@@ -77,14 +101,14 @@ macro_rules! make_unit {
     ($vis:vis $name:ident : $t:ty, base = $base:ty, from_base = $from_base:expr, into_base = $into_base:expr $(,)?) => {
         $vis struct $name($crate::Wrapper<'static, $t>);
         impl $crate::Unit for $name {
-            type Raw = $t;
+            type T = $t;
             type Base = $base;
 
             fn new(v: $t) -> Self {
                 Self($crate::Wrapper::new(v))
             }
-            fn raw(&self) -> &$t {
-                &self.0.raw()
+            fn get(&self) -> &$t {
+                &self.0.get()
             }
 
             fn from_base(v: $base) -> Self {
@@ -110,7 +134,7 @@ macro_rules! make_unit {
                 ::core::fmt::Display::fmt(&self.0, f)
             }
         }
-        impl<U: $crate::Unit<Raw = $t, Base = $base>> ::core::cmp::PartialEq<U> for $name where for<'a> $crate::Wrapper<'a, $t>: ::core::cmp::PartialEq {
+        impl<U: $crate::Unit<T = $t, Base = $base>> ::core::cmp::PartialEq<U> for $name where for<'a> $crate::Wrapper<'a, $t>: ::core::cmp::PartialEq {
             fn eq(&self, other: &U) -> bool {
                 <Self as $crate::Unit>::into_base(::core::clone::Clone::clone(self)).0.eq(&<U as $crate::Unit>::into_base(::core::clone::Clone::clone(other)).0)
             }
